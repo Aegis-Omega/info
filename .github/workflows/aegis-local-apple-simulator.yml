@@ -1,0 +1,34 @@
+name: Apple simulator build
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'apps/aegis-local-desk/**'
+      - '.github/workflows/aegis-local-apple-simulator.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apple-simulator-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  simulator:
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Build and launch in simulator
+        run: bash apps/aegis-local-desk/Apple/check-simulator.sh
+      - name: Upload build evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: apple-simulator-${{ github.sha }}-${{ github.run_id }}
+          path: apps/aegis-local-desk/apple-evidence/
+          retention-days: 7
+          if-no-files-found: error

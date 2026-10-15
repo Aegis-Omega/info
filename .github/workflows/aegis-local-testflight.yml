@@ -1,0 +1,95 @@
+name: AEGIS Local TestFlight
+
+# Manual only. Simulator checks and RH workflows remain unchanged.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aegis-local-testflight
+  cancel-in-progress: false
+
+jobs:
+  signing-and-upload:
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+
+      - name: Validate Apple signing secrets
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          for name in ASC_KEY_ID ASC_ISSUER_ID ASC_PRIVATE_KEY; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Missing repository Actions secret: $name"
+              exit 1
+            fi
+          done
+          echo "All three signing secrets are configured (values hidden)."
+
+      - name: Archive, cloud sign, upload to TestFlight
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          KEY_PATH="$RUNNER_TEMP/AuthKey_${ASC_KEY_ID}.p8"
+          trap 'rm -f "$KEY_PATH"' EXIT
+          printf '%s\n' "$ASC_PRIVATE_KEY" > "$KEY_PATH"
+          if ! grep -q -- '-----BEGIN PRIVATE KEY-----' "$KEY_PATH"; then
+            echo "::error::ASC_PRIVATE_KEY must contain the unmodified contents of the .p8 private key."
+            exit 1
+          fi
+
+          PROJECT="apps/aegis-local-desk/Apple/AEGISLocal.xcodeproj"
+          ARCHIVE="$RUNNER_TEMP/AEGISLocal.xcarchive"
+          EXPORT_PLIST="$RUNNER_TEMP/AEGIS-ExportOptions.plist"
+          mkdir -p "$RUNNER_TEMP/aegis-export"
+
+          xcodebuild archive \
+            -project "$PROJECT" \
+            -scheme AEGISLocal \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$ARCHIVE" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$KEY_PATH" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+            DEVELOPMENT_TEAM=9233QLPC4Y \
+            PRODUCT_BUNDLE_IDENTIFIER=org.aegis.localdesk \
+            CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
+            CODE_SIGN_STYLE=Automatic
+
+          cat > "$EXPORT_PLIST" <<'PLIST'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>destination</key><string>upload</string>
+            <key>signingStyle</key><string>automatic</string>
+            <key>teamID</key><string>9233QLPC4Y</string>
+            <key>manageAppVersionAndBuildNumber</key><false/>
+          </dict></plist>
+          PLIST
+
+          xcodebuild -exportArchive \
+            -archivePath "$ARCHIVE" \
+            -exportOptionsPlist "$EXPORT_PLIST" \
+            -exportPath "$RUNNER_TEMP/aegis-export" \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$KEY_PATH" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+
+          echo "Archive/export upload command finished. Check App Store Connect for build processing."

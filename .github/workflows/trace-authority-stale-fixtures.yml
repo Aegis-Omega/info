@@ -1,0 +1,158 @@
+name: TRACE Authority-Stale Fixture Witness
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'examples/authority-stale/**'
+      - '.github/workflows/trace-authority-stale-fixtures.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  reproduce:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout candidate branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
+          fetch-depth: 0
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install exact fixture dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install \
+            rfc8785==0.1.4 \
+            cryptography==49.0.0
+
+      - name: Generate candidate fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          python examples/authority-stale/gen_authority_stale_fixtures.py | tee /tmp/generator.log
+          grep -F 'AUTHORITY_STALE_FIXTURES_GENERATED' /tmp/generator.log
+          grep -F 'vectors=6' /tmp/generator.log
+
+      - name: Verify byte reproduction when fixtures are committed
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir='examples/authority-stale'
+          if git ls-files --error-unmatch "$dir/expected.json" >/dev/null 2>&1; then
+            git diff --exit-code -- "$dir"/*.json
+            untracked="$(git status --porcelain --untracked-files=all -- "$dir" | awk '$1 == "??" && $2 ~ /\.json$/ {print}')"
+            test -z "$untracked"
+            echo 'BYTE_REPRODUCTION_AGAINST_COMMITTED_FIXTURES=PASS'
+          else
+            echo 'COMMITTED_FIXTURES_NOT_PRESENT_YET=GENERATE_AND_COMMIT'
+          fi
+
+      - name: Regenerate twice and compare bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          dir='examples/authority-stale'
+          mkdir -p /tmp/first /tmp/second
+          cp "$dir"/*.json /tmp/first/
+          python "$dir/gen_authority_stale_fixtures.py" >/tmp/generator-second.log
+          cp "$dir"/*.json /tmp/second/
+          diff -ru /tmp/first /tmp/second
+          echo 'TWO_RUN_BYTE_REPRODUCTION=PASS'
+
+      - name: Verify one-defect-per-vector and crypto-valid theorem
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path('examples/authority-stale')
+          expected = json.loads((root / 'expected.json').read_text(encoding='utf-8'))
+          results = expected['results']
+          assert len(results) == 6, results
+
+          assert results['01-valid-current-authority.json'] == {
+              'action_receipts_verified': True,
+              'crypto_valid': True,
+              'defect': None,
+              'resolution_class': 'RESOLVED_MATCH',
+              'verifier_result': 'PASS',
+          }
+
+          for name, result in results.items():
+              assert result['crypto_valid'] is True, (name, result)
+              if name == '01-valid-current-authority.json':
+                  continue
+              assert result['action_receipts_verified'] is False, (name, result)
+              assert result['defect'], (name, result)
+              assert result['verifier_result'] in {'FAIL', 'CONTRAINDICATED'}, (name, result)
+
+          baseline = json.loads((root / '01-valid-current-authority.json').read_text())
+          replay = json.loads((root / '06-pure-replay.json').read_text())
+          assert replay['receipt'] == baseline['receipt']
+          assert replay['verification_context']['replay_ledger']['replay_seen'] is True
+          assert baseline['verification_context']['replay_ledger']['replay_seen'] is False
+
+          stale_epoch = json.loads((root / '03-stale-authority-epoch.json').read_text())
+          fence_mismatch = json.loads((root / '05-fence-token-mismatch.json').read_text())
+          assert stale_epoch['receipt']['payload']['fence_token'] == baseline['receipt']['payload']['fence_token']
+          assert fence_mismatch['receipt']['payload']['authority_epoch'] == baseline['receipt']['payload']['authority_epoch']
+
+          unresolvable = results['04-authority-epoch-unresolvable.json']
+          assert unresolvable['resolution_class'] == 'UNRESOLVABLE'
+          assert unresolvable['verifier_result'] == 'CONTRAINDICATED'
+
+          print('AUTHORITY_STALE_CANDIDATE_SEMANTICS=PASS')
+          PY
+
+      - name: Commit generated fixtures once
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        shell: bash
+        env:
+          TARGET_BRANCH: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          dir='examples/authority-stale'
+          git add "$dir"/*.json
+          if git diff --cached --quiet; then
+            echo 'GENERATED_FIXTURES_ALREADY_COMMITTED=TRUE'
+            exit 0
+          fi
+          git config user.name 'trace-fixture-witness[bot]'
+          git config user.email 'trace-fixture-witness[bot]@users.noreply.github.com'
+          git commit -m 'test(trace): commit generated authority-stale fixtures'
+          git push origin "HEAD:$TARGET_BRANCH"
+          echo 'GENERATED_FIXTURES_COMMITTED=TRUE'
+
+      - name: Build review artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/trace-authority-stale-candidate"
+          mkdir -p "$out"
+          cp examples/authority-stale/*.json "$out/"
+          cp examples/authority-stale/gen_authority_stale_fixtures.py "$out/"
+          cp examples/authority-stale/README.md "$out/"
+          cp /tmp/generator.log "$out/GENERATOR.log"
+          (
+            cd "$out"
+            sha256sum * | LC_ALL=C sort > SHA256SUMS
+          )
+
+      - name: Upload review artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: trace-authority-stale-candidate-${{ github.sha }}
+          path: ${{ runner.temp }}/trace-authority-stale-candidate
+          if-no-files-found: error
+          retention-days: 90

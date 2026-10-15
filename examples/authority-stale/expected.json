@@ -1,0 +1,72 @@
+{
+  "existing_coverage_reused": {
+    "action_ref": [
+      "conformance/05",
+      "conformance/10",
+      "conformance/18",
+      "conformance/19"
+    ],
+    "policy_digest": [
+      "acta/05-stale-policy-digest"
+    ],
+    "session_ref": [
+      "acta/06-session-binding-mismatch",
+      "conformance/12",
+      "conformance/21"
+    ]
+  },
+  "new_surface": [
+    "state_digest",
+    "authority_epoch",
+    "fence_token",
+    "replay_ledger"
+  ],
+  "non_normative": true,
+  "principle": "crypto_valid=true is necessary but insufficient for authority-context verification",
+  "results": {
+    "01-valid-current-authority.json": {
+      "action_receipts_verified": true,
+      "crypto_valid": true,
+      "defect": null,
+      "resolution_class": "RESOLVED_MATCH",
+      "verifier_result": "PASS"
+    },
+    "02-state-digest-mismatch.json": {
+      "action_receipts_verified": false,
+      "crypto_valid": true,
+      "defect": "state_digest_mismatch",
+      "resolution_class": "CONTRADICTED",
+      "verifier_result": "FAIL"
+    },
+    "03-stale-authority-epoch.json": {
+      "action_receipts_verified": false,
+      "crypto_valid": true,
+      "defect": "stale_authority_epoch",
+      "resolution_class": "CONTRADICTED",
+      "verifier_result": "FAIL"
+    },
+    "04-authority-epoch-unresolvable.json": {
+      "action_receipts_verified": false,
+      "crypto_valid": true,
+      "defect": "authority_epoch_unresolvable",
+      "resolution_class": "UNRESOLVABLE",
+      "verifier_result": "CONTRAINDICATED"
+    },
+    "05-fence-token-mismatch.json": {
+      "action_receipts_verified": false,
+      "crypto_valid": true,
+      "defect": "fence_token_mismatch",
+      "resolution_class": "CONTRADICTED",
+      "verifier_result": "FAIL"
+    },
+    "06-pure-replay.json": {
+      "action_receipts_verified": false,
+      "crypto_valid": true,
+      "defect": "pure_replay",
+      "resolution_class": "REPLAYED",
+      "verifier_result": "FAIL"
+    }
+  },
+  "schema_version": "candidate-1",
+  "source_issue": "agentrust-io/trace-spec#66"
+}

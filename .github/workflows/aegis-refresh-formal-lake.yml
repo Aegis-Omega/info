@@ -1,0 +1,62 @@
+name: AEGIS Refresh - Formal Conjectures exact-main Lake test
+on:
+  push:
+    branches:
+      - aegis-refresh/verify-localdesk-hub-20261024
+    paths:
+      - .github/workflows/aegis-refresh-formal-lake.yml
+permissions:
+  contents: read
+jobs:
+  lean-test:
+    name: Pinned exact-main original lake --wfail test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout immutable formal-conjectures main
+        uses: actions/checkout@v4
+        with:
+          repository: Aegis-Omega/formal-conjectures
+          ref: e9dd3abf717dc0f844f460b66b3a01c602fc8b43
+          path: formal-src
+          persist-credentials: false
+      - name: Confirm exact source and toolchain pins
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "HOST_WORKFLOW_REPOSITORY=$GITHUB_REPOSITORY"
+          echo "FORMAL_SOURCE_SHA=$(git -C formal-src rev-parse HEAD)"
+          test "$(git -C formal-src rev-parse HEAD)" = "e9dd3abf717dc0f844f460b66b3a01c602fc8b43"
+          test -z "$(git -C formal-src status --porcelain)"
+          test -f formal-src/lake-manifest.json
+          test -f formal-src/lean-toolchain
+          git -C formal-src hash-object lean-toolchain lakefile.toml lake-manifest.json
+          cat formal-src/lean-toolchain
+      - name: Install official elan toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --location --retry 3 https://github.com/leanprover/elan/releases/download/v1.4.2/elan-x86_64-unknown-linux-gnu.tar.gz | tar xz
+          ./elan-init -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      - name: Restore pinned Mathlib build cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.cache/mathlib
+          key: aegis-formal-oleans-${{ hashFiles('formal-src/lean-toolchain', 'formal-src/lake-manifest.json') }}
+          restore-keys: |
+            aegis-formal-oleans-
+      - name: Get official mathlib olean cache
+        shell: bash
+        working-directory: formal-src
+        run: |
+          set -euo pipefail
+          lake --version
+          lake exe cache get
+      - name: Run original kernel-backed test target
+        shell: bash
+        working-directory: formal-src
+        run: |
+          set -euo pipefail
+          lake --wfail test
+          echo "FORMAL_LAKE_TEST_PASS_SOURCE_SHA=$(git rev-parse HEAD)"

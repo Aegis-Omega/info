@@ -1,0 +1,75 @@
+# Isolated, read-only execution lane. No production, no RH proof promotion.
+name: AEGIS Refresh - Real Local Desk and Hub checks
+on:
+  push:
+    branches:
+      - aegis-refresh/verify-localdesk-hub-20261024
+    paths:
+      - .github/workflows/aegis-refresh-verify.yml
+permissions:
+  contents: read
+jobs:
+  local-desk:
+    name: Original Local Desk unittest (full)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout exact info source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Source and interpreter provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "INFO_REPOSITORY=$GITHUB_REPOSITORY"
+          echo "INFO_SOURCE_SHA=$(git rev-parse HEAD)"
+          git status --short
+          python3 --version
+          git hash-object apps/aegis-local-desk/desk.py
+          git hash-object apps/aegis-local-desk/test_desk.py
+      - name: Execute the ORIGINAL FOUR tests, no mocks of the suite
+        shell: bash
+        working-directory: apps/aegis-local-desk
+        run: |
+          set -euo pipefail
+          python3 -m unittest -v test_desk 2>&1 | tee "$RUNNER_TEMP/local-desk-tests.log"
+          grep -Eq 'Ran 4 tests? in ' "$RUNNER_TEMP/local-desk-tests.log"
+  public-hub:
+    name: Real npm ci and Hub build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - name: Checkout existing public AEGIS main
+        uses: actions/checkout@v4
+        with:
+          repository: Aegis-Omega/AEGIS-OMEGA
+          ref: main
+          path: aegis-source
+          persist-credentials: false
+      - name: Verify exact checkout and npm manifests
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "HUB_SOURCE_SHA=$(git -C aegis-source rev-parse HEAD)"
+          test -z "$(git -C aegis-source status --porcelain)"
+          test -f aegis-source/hub/package.json
+          test -f aegis-source/hub/package-lock.json
+          git -C aegis-source hash-object hub/package.json hub/package-lock.json
+      - name: Node toolchain
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Existing shared dependency installation and actual Hub build
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --version
+          npm --version
+          if test -f aegis-source/packages/shared/package-lock.json; then
+            (cd aegis-source/packages/shared && npm ci --no-audit --no-fund)
+          fi
+          cd aegis-source/hub
+          npm ci --no-audit --no-fund
+          npm run build
+          echo "HUB_BUILD_PASS_SOURCE_SHA=$(git rev-parse HEAD)"

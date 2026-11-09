@@ -1,0 +1,61 @@
+{
+  "action": {
+    "action_scope": "resource:ledger/demo-account-7",
+    "action_type": "tool.invoke",
+    "agent_id": "did:web:agent.example:worker-17",
+    "arguments_digest": "sha256:b8b8e6ec5ac32a7bb35bc1fd5b573126749912f6230ff200e648604b53f6b644",
+    "tool_name": "ledger.settle"
+  },
+  "description": "Crypto-valid baseline: every admitted authority binding resolves and matches, and the replay ledger has not seen this authorization instance.",
+  "name": "valid-current-authority",
+  "profile": "trace.authority-binding.candidate.v1",
+  "receipt": {
+    "payload": {
+      "action_ref": "sha256:1d4baca45abdbd10b62c4ee5387f9b79b0d669363a6e7c182b819d9bf46d46cd",
+      "authority_epoch": 42,
+      "decision": "allow",
+      "fence_token": "fence:ledger-demo-account-7:00000042",
+      "issued_at": "2026-08-18T18:00:00.000Z",
+      "issuer_id": "did:web:fixtures.agentrust.example#authority-stale-ed25519-01",
+      "policy_digest": "sha256:0b9f3b69d9c763379fe2d15ba5b2bd9429a8e6d5f96acb66e7be6382527bff52",
+      "session_ref": "ses_authority_binding_2026_08_18_001",
+      "state_digest": "sha256:fb7eab86f9c252bbe38b83149026d59994f0b630fae80beede302c1b18019ba4",
+      "type": "agentrust:authority-bound-action-receipt"
+    },
+    "signature": {
+      "alg": "EdDSA",
+      "kid": "did:web:fixtures.agentrust.example#authority-stale-ed25519-01",
+      "sig": "bd7a054308b48c49ebf91089e238a65f1e542aeec5743e7980c0aed563c591c6a58bc0f3e1596ca67bb8dc89cd40e0f12a7385fde281bba7f60ae5d7646ac30b"
+    }
+  },
+  "trusted_issuer_keys": {
+    "did:web:fixtures.agentrust.example#authority-stale-ed25519-01": {
+      "crv": "Ed25519",
+      "kty": "OKP",
+      "public_key_hex": "4bcd2deee37cd853b86b35044f2a73bc166b4d48446d1aff90fa4fabac1dd3db"
+    }
+  },
+  "verification_context": {
+    "admitted_bindings": {
+      "action_ref": "sha256:1d4baca45abdbd10b62c4ee5387f9b79b0d669363a6e7c182b819d9bf46d46cd",
+      "policy_digest": "sha256:0b9f3b69d9c763379fe2d15ba5b2bd9429a8e6d5f96acb66e7be6382527bff52",
+      "session_ref": "ses_authority_binding_2026_08_18_001"
+    },
+    "authority_epoch_resolution": {
+      "status": "resolved",
+      "value": 42
+    },
+    "fence_token_resolution": {
+      "status": "resolved",
+      "value": "fence:ledger-demo-account-7:00000042"
+    },
+    "replay_ledger": {
+      "ledger_key": "sha256:b40720e8cc13b42363014361fcfd2b629b646322dd6c07aa8e54f35958ca43b8",
+      "replay_seen": false
+    },
+    "state_digest_resolution": {
+      "status": "resolved",
+      "value": "sha256:fb7eab86f9c252bbe38b83149026d59994f0b630fae80beede302c1b18019ba4"
+    }
+  }
+}

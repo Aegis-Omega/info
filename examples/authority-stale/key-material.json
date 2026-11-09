@@ -1,0 +1,8 @@
+{
+  "algorithm": "Ed25519",
+  "kid": "did:web:fixtures.agentrust.example#authority-stale-ed25519-01",
+  "private_key_hex": "742e0a0cc137d22d003ed42468fec0ad8268d154b1821dff71e862c927c685b9",
+  "public_key_hex": "4bcd2deee37cd853b86b35044f2a73bc166b4d48446d1aff90fa4fabac1dd3db",
+  "seed_derivation": "sha256('trace authority-stale candidate fixtures deterministic test key v1')",
+  "warning": "TEST-ONLY DETERMINISTIC KEY MATERIAL; NEVER USE IN PRODUCTION"
+}

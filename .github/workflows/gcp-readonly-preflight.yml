@@ -1,0 +1,161 @@
+name: GCP Readonly Preflight
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    env:
+      WIF_A: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+      WIF_B: ${{ secrets.GOOGLE_WORKLOAD_IDENTITY_PROVIDER }}
+      WIF_C: ${{ secrets.WIF_PROVIDER }}
+      SA_A: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      SA_B: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
+      SA_C: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+      PROJECT_VAR: ${{ vars.GCP_PROJECT_ID }}
+      PROJECT_SECRET: ${{ secrets.GCP_PROJECT_ID }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Resolve credential surface without exposing values
+        id: surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p gcp-preflight
+
+          WIF=""
+          WIF_SOURCE="NONE"
+          for pair in \
+            "GCP_WORKLOAD_IDENTITY_PROVIDER:${WIF_A}" \
+            "GOOGLE_WORKLOAD_IDENTITY_PROVIDER:${WIF_B}" \
+            "WIF_PROVIDER:${WIF_C}"; do
+            name="${pair%%:*}"
+            value="${pair#*:}"
+            if [[ -n "$value" ]]; then WIF="$value"; WIF_SOURCE="$name"; break; fi
+          done
+
+          SA=""
+          SA_SOURCE="NONE"
+          for pair in \
+            "GCP_SERVICE_ACCOUNT:${SA_A}" \
+            "GOOGLE_SERVICE_ACCOUNT:${SA_B}" \
+            "WIF_SERVICE_ACCOUNT:${SA_C}"; do
+            name="${pair%%:*}"
+            value="${pair#*:}"
+            if [[ -n "$value" ]]; then SA="$value"; SA_SOURCE="$name"; break; fi
+          done
+
+          PROJECT="${PROJECT_VAR:-${PROJECT_SECRET:-direct-hangar-w5bwk}}"
+          [[ -n "$PROJECT" ]] || PROJECT="direct-hangar-w5bwk"
+
+          WIF_PRESENT=false
+          SA_PRESENT=false
+          [[ -n "$WIF" ]] && WIF_PRESENT=true
+          [[ -n "$SA" ]] && SA_PRESENT=true
+
+          if [[ "$WIF_PRESENT" == true && "$SA_PRESENT" == true ]]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "project=$PROJECT" >> "$GITHUB_OUTPUT"
+          echo "wif_source=$WIF_SOURCE" >> "$GITHUB_OUTPUT"
+          echo "sa_source=$SA_SOURCE" >> "$GITHUB_OUTPUT"
+
+          python - "$WIF_PRESENT" "$SA_PRESENT" "$WIF_SOURCE" "$SA_SOURCE" "$PROJECT" <<'PY'
+          import json, sys
+          wif_present = sys.argv[1] == 'true'
+          sa_present = sys.argv[2] == 'true'
+          json.dump({
+            'credential_mode': 'WIF',
+            'wif_present': wif_present,
+            'service_account_present': sa_present,
+            'wif_source': sys.argv[3],
+            'service_account_source': sys.argv[4],
+            'target_project': sys.argv[5],
+            'mutation_performed': False,
+          }, open('gcp-preflight/credential-surface.json', 'w'), indent=2, sort_keys=True)
+          PY
+
+      - name: Credential surface missing
+        if: steps.surface.outputs.ready != 'true'
+        shell: bash
+        run: |
+          echo "GCP_CREDENTIAL_ADMISSION=BLOCKED_MISSING_WIF_OR_SERVICE_ACCOUNT"
+          echo "WIF_SOURCE=${{ steps.surface.outputs.wif_source }}"
+          echo "SERVICE_ACCOUNT_SOURCE=${{ steps.surface.outputs.sa_source }}"
+          echo "TARGET_PROJECT=${{ steps.surface.outputs.project }}"
+
+      - name: Authenticate with WIF
+        if: steps.surface.outputs.ready == 'true'
+        uses: google-github-actions/auth@v3
+        with:
+          project_id: ${{ steps.surface.outputs.project }}
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER || secrets.GOOGLE_WORKLOAD_IDENTITY_PROVIDER || secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT || secrets.GOOGLE_SERVICE_ACCOUNT || secrets.WIF_SERVICE_ACCOUNT }}
+
+      - name: Setup gcloud
+        if: steps.surface.outputs.ready == 'true'
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ steps.surface.outputs.project }}
+
+      - name: Read-only project and service preflight
+        if: steps.surface.outputs.ready == 'true'
+        shell: bash
+        run: |
+          set -u
+          PROJECT='${{ steps.surface.outputs.project }}'
+          mkdir -p gcp-preflight
+
+          run_probe() {
+            name="$1"; shift
+            if "$@" >"gcp-preflight/${name}.out" 2>"gcp-preflight/${name}.err"; then
+              printf '%s=PASS\n' "$name"
+            else
+              rc=$?
+              printf '%s=FAIL_RC_%s\n' "$name" "$rc"
+            fi
+            return 0
+          }
+
+          run_probe project_describe gcloud projects describe "$PROJECT" --format=json
+          run_probe billing_describe gcloud billing projects describe "$PROJECT" --format=json
+          run_probe enabled_services gcloud services list --enabled --project "$PROJECT" --format=json
+          run_probe firestore_default gcloud firestore databases describe --database='(default)' --project "$PROJECT" --format=json
+          run_probe cloud_run_services gcloud run services list --project "$PROJECT" --region=europe-west1 --format=json
+          run_probe storage_buckets gcloud storage buckets list --project "$PROJECT" --format=json
+
+          python - <<'PY'
+          import json, pathlib
+          root = pathlib.Path('gcp-preflight')
+          statuses = {}
+          for err in root.glob('*.err'):
+              name = err.stem
+              out = root / f'{name}.out'
+              statuses[name] = {
+                  'output_present': out.exists() and out.stat().st_size > 0,
+                  'error_present': err.stat().st_size > 0,
+              }
+          json.dump({
+              'credential_admission': 'WIF_AUTH_ATTEMPTED',
+              'mutation_performed': False,
+              'probes': statuses,
+          }, open(root/'preflight-summary.json','w'), indent=2, sort_keys=True)
+          PY
+
+      - name: Upload preflight witness
+        uses: actions/upload-artifact@v4
+        with:
+          name: gcp-readonly-preflight
+          path: gcp-preflight/
+          if-no-files-found: error

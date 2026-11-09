@@ -1,0 +1,50 @@
+name: NPM Sovereign Guard Witness
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  npm-sovereign-guard-witness:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Query npm registry
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p npm-witness
+          npm search "sovereign guard" --json > npm-witness/search.json
+          node - <<'NODE'
+          const fs = require('fs');
+          const rows = JSON.parse(fs.readFileSync('npm-witness/search.json','utf8'));
+          const filtered = rows.filter(x => /sovereign|guard/i.test(`${x.name} ${x.description || ''}`));
+          fs.writeFileSync('npm-witness/filtered.json', JSON.stringify(filtered, null, 2));
+          console.log(JSON.stringify(filtered.map(x => ({name:x.name,version:x.version,description:x.description})), null, 2));
+          NODE
+          for pkg in sovereign-guard @aegis-omega/sovereign-guard @tarikskalic33/sovereign-guard; do
+            safe="$(echo "$pkg" | tr '/@' '__')"
+            if npm view "$pkg" --json > "npm-witness/view-${safe}.json" 2>"npm-witness/view-${safe}.err"; then
+              echo "FOUND=$pkg"
+            else
+              echo "NOT_FOUND=$pkg"
+            fi
+          done
+
+      - name: Upload npm witness
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-sovereign-guard-witness
+          path: npm-witness/
+          if-no-files-found: error

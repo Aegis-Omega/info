@@ -1,0 +1,105 @@
+name: Firestore Emulator Bridge
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  firestore-emulator-bridge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Setup Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Resolve Firebase CLI and download Firestore emulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          java -version
+          FIREBASE_TOOLS_VERSION="$(npm view firebase-tools version)"
+          echo "FIREBASE_TOOLS_VERSION=$FIREBASE_TOOLS_VERSION" >> "$GITHUB_ENV"
+          mkdir -p firebase-project
+          cat > firebase-project/firebase.json <<'JSON'
+          {
+            "emulators": {
+              "firestore": {
+                "host": "127.0.0.1",
+                "port": 8080
+              }
+            }
+          }
+          JSON
+          cd firebase-project
+          npx -y "firebase-tools@$FIREBASE_TOOLS_VERSION" emulators:exec \
+            --only firestore \
+            --project proofline-emulator \
+            "echo FIRESTORE_EMULATOR_READY"
+
+      - name: Package emulator binary with provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p firestore-emulator-bundle
+          JAR="$(find "$HOME/.cache/firebase/emulators" -type f -name '*firestore*jar' | sort | tail -1)"
+          test -n "$JAR"
+          cp "$JAR" firestore-emulator-bundle/
+          JAR_NAME="$(basename "$JAR")"
+          JAR_SHA256="$(sha256sum "$JAR" | awk '{print $1}')"
+          java -jar "$JAR" --help > firestore-emulator-bundle/java-help.txt 2>&1 || true
+          cat > firestore-emulator-bundle/manifest.json <<JSON
+          {
+            "firebase_tools_version": "$FIREBASE_TOOLS_VERSION",
+            "java_version": "21",
+            "jar_name": "$JAR_NAME",
+            "jar_sha256": "$JAR_SHA256",
+            "project_id": "proofline-emulator",
+            "host": "127.0.0.1",
+            "port": 8080
+          }
+          JSON
+          (
+            cd firestore-emulator-bundle
+            sha256sum "$JAR_NAME" > SHA256SUMS
+          )
+          cat firestore-emulator-bundle/manifest.json
+
+      - name: Direct Java emulator smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          JAR="$(find firestore-emulator-bundle -type f -name '*firestore*jar' | head -1)"
+          java -jar "$JAR" --host=127.0.0.1 --port=8081 --project_id=proofline-emulator > /tmp/firestore-emulator.log 2>&1 &
+          PID=$!
+          trap 'kill $PID 2>/dev/null || true' EXIT
+          for i in $(seq 1 30); do
+            if curl -fsS "http://127.0.0.1:8081/" >/dev/null 2>&1; then
+              echo "DIRECT_JAVA_EMULATOR_READY=TRUE"
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/firestore-emulator.log
+          exit 1
+
+      - name: Upload emulator bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: firestore-emulator-linux
+          path: firestore-emulator-bundle/
+          if-no-files-found: error
+          compression-level: 0

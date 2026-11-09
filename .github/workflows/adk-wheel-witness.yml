@@ -84,3 +84,48 @@ jobs:
           name: adk-runtime-witness-python-${{ matrix.python }}
           path: adk-runtime-witness-*.json
           if-no-files-found: error
+
+      - name: Build complete offline runtime and test wheelhouse
+        if: matrix.python == '3.13'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p offline-wheelhouse
+          python -m pip freeze | sort > offline-wheelhouse/requirements.freeze.txt
+          python -m pip download --only-binary=:all: -r offline-wheelhouse/requirements.freeze.txt "pytest>=8.4,<9" -d offline-wheelhouse
+          (
+            cd offline-wheelhouse
+            sha256sum *.whl | sort > SHA256SUMS
+          )
+          python - <<'PY'
+          import hashlib, json, pathlib, platform
+          root = pathlib.Path('offline-wheelhouse')
+          wheels = []
+          for path in sorted(root.glob('*.whl')):
+              wheels.append({
+                  'file': path.name,
+                  'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
+                  'size': path.stat().st_size,
+              })
+          manifest = {
+              'python': platform.python_version(),
+              'wheel_count': len(wheels),
+              'includes_pytest': any(w['file'].startswith('pytest-') for w in wheels),
+              'wheels': wheels,
+          }
+          (root / 'wheelhouse-manifest.json').write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding='utf-8')
+          print(json.dumps({
+              'wheel_count': len(wheels),
+              'python': platform.python_version(),
+              'includes_pytest': manifest['includes_pytest'],
+          }, sort_keys=True))
+          PY
+
+      - name: Upload complete offline wheelhouse
+        if: matrix.python == '3.13'
+        uses: actions/upload-artifact@v4
+        with:
+          name: proofline-offline-wheelhouse-python-3.13
+          path: offline-wheelhouse/
+          if-no-files-found: error
+          compression-level: 0

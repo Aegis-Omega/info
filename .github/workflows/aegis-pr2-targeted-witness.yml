@@ -1,0 +1,190 @@
+name: AEGIS PR-2 Full Exact-Head Witness
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pr2-full:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout witness repo
+        uses: actions/checkout@v4
+
+      - name: Checkout exact AEGIS PR-2 candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          CANDIDATE_SHA="e3dc56f3da9156c091bfbc2067d775aa2190ac6d"
+          EXPECTED_PARENT_SHA="6bf071d9c757d0f3514904f1efad3e3b14a60a09"
+          git clone --filter=blob:none https://github.com/Aegis-Omega/AEGIS-OMEGA.git aegis
+          cd aegis
+          git fetch origin "$CANDIDATE_SHA" "$EXPECTED_PARENT_SHA"
+          git checkout --detach "$CANDIDATE_SHA"
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          git merge-base --is-ancestor "$EXPECTED_PARENT_SHA" "$CANDIDATE_SHA"
+          test "$(git merge-base "$EXPECTED_PARENT_SHA" "$CANDIDATE_SHA")" = "$EXPECTED_PARENT_SHA"
+          echo "AEGIS_CANDIDATE_SHA=$CANDIDATE_SHA" >> "$GITHUB_ENV"
+          echo "AEGIS_EXPECTED_PARENT_SHA=$EXPECTED_PARENT_SHA" >> "$GITHUB_ENV"
+          echo "AEGIS_AHEAD_BY=$(git rev-list --count "$EXPECTED_PARENT_SHA..$CANDIDATE_SHA")" >> "$GITHUB_ENV"
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: aegis/sovereign-omega-v2/mcp-server/package-lock.json
+
+      - name: Install exact schema validator
+        run: python -m pip install jsonschema==4.23.0
+
+      - name: Validate PR-2 schemas
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd aegis
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from jsonschema.validators import validator_for
+          paths = (
+              sorted(Path('schemas').glob('*-envelope.v1.schema.json'))
+              + sorted(Path('schemas').glob('*-receipt.v1.schema.json'))
+              + [Path('schemas/effect-witness.v1.schema.json'), Path('schemas/writer-lease.v1.schema.json')]
+          )
+          for path in paths:
+              schema = json.loads(path.read_text(encoding='utf-8'))
+              validator_for(schema).check_schema(schema)
+              print(f'SCHEMA_OK {path}')
+          PY
+
+      - name: Run canonical Automaton-3 75-test suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd aegis
+          python scripts/run-automaton3-tests.py \
+            --output "$RUNNER_TEMP/AUTOMATON3_TEST_SUMMARY.json" \
+            --log "$RUNNER_TEMP/AUTOMATON3_TEST.log"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          p = Path(os.environ['RUNNER_TEMP']) / 'AUTOMATON3_TEST_SUMMARY.json'
+          s = json.loads(p.read_text(encoding='utf-8'))
+          assert s['expected_test_count'] == 75, s
+          assert s['actual_test_count'] == 75, s
+          assert s['test_count_matches_expected'] is True, s
+          assert s['return_code'] == 0, s
+          assert s['pr2_independent_pre_post_observation_asserted'] is True, s
+          assert s['pr2_adapter_bound_effect_receipt_production_asserted'] is True, s
+          assert s['pr2_complete_verification_unavailable_asserted'] is True, s
+          assert s['pr2_atomic_admission_unavailable_asserted'] is True, s
+          assert s['pr2_effect_bound_admission_unavailable_asserted'] is True, s
+          assert s.get('valid_effect_receipt_production_unavailable_asserted') is not True, s
+          print('AUTOMATON3_75_PASS')
+          PY
+
+      - name: Build and test MCP fail-closed integration
+        working-directory: aegis/sovereign-omega-v2/mcp-server
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run test:resources
+          npm run test:automaton3 | tee "$RUNNER_TEMP/AUTOMATON3_MCP.log"
+          grep -F 'AUTOMATON3_MCP_PASS' "$RUNNER_TEMP/AUTOMATON3_MCP.log"
+
+      - name: Validate claims and constitutional anchors
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd aegis
+          node scripts/validate-claims.mjs
+          (cd sovereign-omega-v2 && node scripts/verify-hashes.mjs)
+
+      - name: Run canonical candidate validator
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd aegis
+          python scripts/validate-automaton3.py \
+            --candidate-sha "$AEGIS_CANDIDATE_SHA" \
+            --expected-parent-sha "$AEGIS_EXPECTED_PARENT_SHA" \
+            --test-summary "$RUNNER_TEMP/AUTOMATON3_TEST_SUMMARY.json" \
+            --mcp-log "$RUNNER_TEMP/AUTOMATON3_MCP.log" \
+            --receipt-output "$RUNNER_TEMP/AUTOMATON3_RECEIPT.json" \
+            --manifest-output "$RUNNER_TEMP/AUTOMATON3_CANDIDATE_MANIFEST.json"
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP'])
+          receipt = json.loads((root / 'AUTOMATON3_RECEIPT.json').read_text())
+          manifest = json.loads((root / 'AUTOMATON3_CANDIDATE_MANIFEST.json').read_text())
+          assert receipt['outcome'] == 'ADMITTED', receipt
+          assert receipt['violation_count'] == 0, receipt
+          assert receipt['signature_mode'] == 'DETERMINISTIC_VALIDATION_ONLY', receipt
+          assert receipt['admission_scope'] == 'REPOSITORY_CANDIDATE_ADMISSION_NOT_EFFECT_BOUND_STATE_ADMISSION', receipt
+          assert receipt['complete_verification'] == 'NOT_IMPLEMENTED', receipt
+          assert receipt['atomic_admission'] == 'NOT_IMPLEMENTED', receipt
+          assert receipt['effect_bound_admission'] == 'UNAVAILABLE', receipt
+          assert manifest['admission_scope'] == 'REPOSITORY_CANDIDATE_VALIDATION_ONLY', manifest
+          assert manifest['effect_observation_scope'] == 'REFERENCE_ADAPTER_BOUND_ONLY', manifest
+          assert manifest['complete_verification'] == 'NOT_IMPLEMENTED', manifest
+          assert manifest['atomic_admission'] == 'NOT_IMPLEMENTED', manifest
+          assert manifest['effect_bound_admission'] == 'UNAVAILABLE', manifest
+          print('CANONICAL_CANDIDATE_VALIDATOR_PASS')
+          PY
+
+      - name: Build external exact-head witness
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/aegis-pr2-external-witness"
+          mkdir -p "$out"
+          cp "$RUNNER_TEMP/AUTOMATON3_TEST_SUMMARY.json" "$out/"
+          cp "$RUNNER_TEMP/AUTOMATON3_TEST.log" "$out/"
+          cp "$RUNNER_TEMP/AUTOMATON3_MCP.log" "$out/"
+          cp "$RUNNER_TEMP/AUTOMATON3_RECEIPT.json" "$out/"
+          cp "$RUNNER_TEMP/AUTOMATON3_CANDIDATE_MANIFEST.json" "$out/"
+          cat > "$out/WITNESS.txt" <<EOF
+          WITNESS_KIND=AEGIS_PR2_EXTERNAL_EXACT_HEAD_WITNESS_V1
+          SOURCE_REPOSITORY=Aegis-Omega/AEGIS-OMEGA
+          CANDIDATE_SHA=$AEGIS_CANDIDATE_SHA
+          EXPECTED_STACKED_PARENT_SHA=$AEGIS_EXPECTED_PARENT_SHA
+          AHEAD_BY=$AEGIS_AHEAD_BY
+          RUNNER_REPOSITORY=tarikskalic33/info
+          AUTOMATON3_TESTS=75
+          AUTOMATON3_RESULT=PASS
+          MCP_FAIL_CLOSED_INTEGRATION=PASS
+          CANDIDATE_VALIDATOR=ADMITTED
+          CANDIDATE_ADMISSION_SCOPE=REPOSITORY_CANDIDATE_ADMISSION_NOT_EFFECT_BOUND_STATE_ADMISSION
+          SIGNATURE_MODE=DETERMINISTIC_VALIDATION_ONLY
+          EFFECT_ADAPTER_PROTOCOL=IMPLEMENTED_AND_TESTED_REFERENCE
+          FILESYSTEM_EFFECT_ADAPTER=IMPLEMENTED_AND_TESTED_REFERENCE
+          INDEPENDENT_PRE_POST_EFFECT_OBSERVATION=IMPLEMENTED_AND_TESTED_REFERENCE
+          VALID_EFFECT_RECEIPT_PRODUCTION=ADAPTER_BOUND_ONLY
+          COMPLETE_VERIFICATION=NOT_IMPLEMENTED
+          ATOMIC_ADMISSION=NOT_IMPLEMENTED
+          EFFECT_BOUND_ADMISSION=UNAVAILABLE
+          C_IMPLEMENTATION=FALSE
+          AEGIS_REPO_NATIVE_EXACT_HEAD_CI_PASS=NOT_ESTABLISHED
+          EOF
+          (cd "$out" && sha256sum * | LC_ALL=C sort > SHA256SUMS)
+          sha256sum "$out/SHA256SUMS"
+
+      - name: Upload full PR-2 witness
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegis-pr2-external-${{ env.AEGIS_CANDIDATE_SHA }}
+          path: ${{ runner.temp }}/aegis-pr2-external-witness
+          if-no-files-found: error
+          retention-days: 90

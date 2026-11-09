@@ -1,18 +1,16 @@
-name: AEGIS PR3 RED Contract
-
+name: AEGIS Work Claim GREEN
 on:
   pull_request:
     branches: [main]
     paths: ['AEGIS_PR3_RED.md']
-
 permissions:
   contents: read
-
 jobs:
-  red:
+  green:
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     env:
-      CANDIDATE_SHA: b60e1eb6d86891b54e5d81c6b2bac26d56ac0bce
+      CANDIDATE_SHA: db311cfc900f594dc24aa5cc842586495a43ce61
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -23,14 +21,24 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Prove PR3 contract is RED for the intended missing verifier
+      - name: Verify exact GREEN candidate
+        working-directory: aegis
+        run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+      - name: Run durable claim contracts
         working-directory: aegis
         shell: bash
         run: |
-          set +e
-          python sovereign-omega-v2/python/tests/test_effect_verifier_pr3.py > "$RUNNER_TEMP/red.log" 2>&1
-          rc=$?
-          cat "$RUNNER_TEMP/red.log"
-          test "$rc" -ne 0
-          grep -q "No module named 'harness.sdk.effect_verifier'" "$RUNNER_TEMP/red.log"
-          echo "PR3_RED_INTENDED_MISSING_EFFECT_VERIFIER=PASS"
+          set -euo pipefail
+          python -m unittest -v agents.tests.test_work_claim agents.tests.test_work_claim_concurrency 2>&1 | tee "$RUNNER_TEMP/claim-green.log"
+          grep -q 'Ran 13 tests' "$RUNNER_TEMP/claim-green.log"
+          grep -q '^OK$' "$RUNNER_TEMP/claim-green.log"
+          echo WORK_CLAIM_13_OF_13=PASS
+      - name: Run inherited organism contracts
+        working-directory: aegis
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m unittest -v agents.tests.test_organism_loop agents.tests.test_provider_contribution agents.tests.test_provider_session 2>&1 | tee "$RUNNER_TEMP/inherited.log"
+          grep -q 'Ran 33 tests' "$RUNNER_TEMP/inherited.log"
+          grep -q '^OK$' "$RUNNER_TEMP/inherited.log"
+          echo INHERITED_ORGANISM_33_OF_33=PASS

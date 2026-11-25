@@ -16,6 +16,15 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 45
     steps:
+      # org.aegis.localdesk ("Aegis Local CI" in App Store Connect) is assigned to the offline
+      # receipt verifier (AEGIS-OMEGA clients/aegis-local-ci-ios). This workflow archives the
+      # older AEGISLocal app, so it must not upload to that record. Remove this step only
+      # after Local Desk has its own bundle ID.
+      - name: Refuse upload (bundle ID reassigned)
+        run: |
+          echo "::error::org.aegis.localdesk is assigned to the Aegis Local CI verifier; AEGISLocal must not upload to it."
+          exit 1
+
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false

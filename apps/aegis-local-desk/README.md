@@ -112,8 +112,53 @@ ne instalira ovu aplikaciju i ne zamjenjuje Mac/Xcode. Nema podešavanja App Sto
 Connecta, potpisivanja, uploada ni dodatnog plaćenog servisa u ovom paketu.
 Apple aplikacija ne izvršava Lean kernel. Desktop provjera ostaje odvojena.
 Prije brisanja aplikacije obavezno izvezi backup; reinstalacija može obrisati
-lokalne podatke. JSON izvoz je čitljiv arhiv; ova verzija nema automatski restore
-ni sinhronizaciju desktopa i iPhonea.
+lokalne podatke. Backup i oporavak su ručni. Desktop i iPhone nemaju zajedničku
+sinhronizaciju.
+
+### Vault, migracija i oporavak
+
+| Stanje | Ponašanje aplikacije |
+| --- | --- |
+| Vault nedostaje | Početna bilješka je dostupna. Datoteka nastaje pri prvoj izmjeni koju sačuvaš. |
+| Postojeći JSON bez verzije | Učitava se kao stari format. Prije prvog upisa u format `schemaVersion: 1` aplikacija arhivira izvorne bajtove. |
+| Oštećen JSON, greška čitanja ili nepodržana verzija | Uređivanje i automatski upis su blokirani. U kartici **Bilješke** možeš ponoviti učitavanje, izvesti čitljive originalne bajtove ili odabrati backup za oporavak. |
+| Potvrđeni oporavak | Aplikacija validira odabrani stari ili v1 JSON, arhivira originalne bajtove i eventualne nespremljene izmjene, pa atomarno postavlja obnovljeni vault. Ako original nije moguće pročitati ili arhivirati, zamjena se prekida. |
+
+Arhive su u `Application Support/AEGISLocal/Backups/` i mogu se pregledati ili
+izvesti preko **Bilješke → Lokalne kopije**. Izvezi kopije izvan aplikacije prije
+brisanja aplikacije. Ako otvaraš staru verziju aplikacije, koristi kopiju iz formata
+prije migracije. Stari kod očekuje dnevnik sastavljen od tekstualnih zapisa.
+
+Dnevnik u v1 JSON-u mapira se na AEGIS tabelarnu evidenciju ovako:
+
+| Kolona | JSON polje | Pravilo |
+| --- | --- | --- |
+| ID | `journal[].id` | UUID za novi zapis. Stari zapisi dobijaju stabilan ID prema redoslijedu unutar vaulta. |
+| Status | `journal[].status` | `VERIFIED`, `OPEN` ili `UNKNOWN`. Novi odgovori modela i stari zapisi dobijaju `UNKNOWN`. |
+| Datum zapisa | `journal[].createdAt` | Za nove zapise, sekunde od 1. januara 2001. UTC prema Foundationovom JSON formatu. |
+| Evidencija | `journal[].question`, `journal[].evidence` | Pitanje i odgovor za nove zapise. Cijeli stari zapis zadržava se u `evidence`. |
+| Izvor / lokator | `journal[].sources[]` | UUID uvezenog izvora, naziv datoteke i broj retka iz konteksta poslanog modelu. |
+| Veza s izvorom | `sources[].id` | Isti UUID u tabeli uvezenih izvora, uz `name` i `text`. |
+
+### Lokalne regresijske provjere vaulta
+
+Iz direktorija `apps/aegis-local-desk`, sa Swiftom 6:
+
+```bash
+test_dir="$(mktemp -d)"
+swiftc -swift-version 5 Apple/AEGISLocal/VaultStorage.swift Apple/Tests/VaultStorageTests.swift \
+  -o "$test_dir/vault-tests" &&
+  "$test_dir/vault-tests"
+```
+
+Apple provjeru pokreni u zasebnom instalacijskom sandboxu s testnim podacima:
+
+| Scenario | Očekivanje |
+| --- | --- |
+| Otvori aplikaciju s oštećenim vaultom. Pošalji je u pozadinu i ponovo otvori. | Upis ostaje blokiran. Izvezeni original je identičan bajt za bajt. |
+| Odaberi neispravan JSON ili otkaži potvrdu valjanog backupa. | Vault i postojeće arhive ostaju iste. |
+| Potvrdi oporavak iz Files, ponovo pokreni aplikaciju i otvori Lokalne kopije. | Obnovljeni sadržaj i arhivirani original su dostupni poslije ponovnog pokretanja. |
+| Na podržanom uređaju s pripremljenim Apple modelom pokreni pitanje offline. | Odgovor se upisuje kao `UNKNOWN`, uz lokatore poslanih odlomaka. |
 
 ## 3. Kontinuitet rada
 
